@@ -1,0 +1,104 @@
+import io
+import zipfile
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.main import app, init_db
+
+
+@pytest.fixture
+def client_for(tmp_path, monkeypatch):
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "test.db"))
+    init_db()
+
+    def make(user):
+        c = TestClient(app)
+        assert c.post("/api/login", json={"username": user}).status_code == 200
+        return c
+    return make
+
+
+def create(c, title="Doc"):
+    return c.post("/api/docs", json={"title": title}).json()["id"]
+
+
+def test_requires_login(client_for):
+    assert TestClient(app).get("/api/docs").status_code == 401
+
+
+def test_create_edit_rename_and_reload_preserves_formatting(client_for):
+    alice = client_for("alice")
+    doc = create(alice)
+    html = "<h1>Title</h1><p><strong>b</strong><em>i</em><u>u</u></p><ol><li>one</li></ol><ul><li>x</li></ul>"
+    assert alice.put(f"/api/docs/{doc}", json={"title": "Renamed", "html": html}).status_code == 200
+    got = alice.get(f"/api/docs/{doc}").json()
+    assert got["title"] == "Renamed" and got["html"] == html and got["role"] == "owner"
+    assert alice.put(f"/api/docs/{doc}", json={"title": "  "}).status_code == 400
+
+
+def test_html_is_sanitized(client_for):
+    alice = client_for("alice")
+    doc = create(alice)
+    alice.put(f"/api/docs/{doc}", json={"html": "<p onclick='x()'>hi</p><script>alert(1)</script>"})
+    stored = alice.get(f"/api/docs/{doc}").json()["html"]
+    assert "script" not in stored and "onclick" not in stored and "hi" in stored
+
+
+def test_sharing_rules(client_for):
+    alice, bob = client_for("alice"), client_for("bob")
+    doc = create(alice, "Plan")
+    assert bob.get(f"/api/docs/{doc}").status_code == 404          # no access yet
+
+    assert alice.post(f"/api/docs/{doc}/share", json={"username": "bob", "role": "viewer"}).status_code == 200
+    seen = bob.get(f"/api/docs/{doc}").json()
+    assert seen["role"] == "viewer" and "shares" not in seen
+    assert bob.put(f"/api/docs/{doc}", json={"html": "<p>x</p>"}).status_code == 403
+    assert bob.post(f"/api/docs/{doc}/share", json={"username": "carol"}).status_code == 403
+    assert bob.delete(f"/api/docs/{doc}").status_code == 403
+
+    lists = bob.get("/api/docs").json()
+    assert doc in [d["id"] for d in lists["shared"]]
+    assert doc not in [d["id"] for d in lists["owned"]]
+
+    alice.post(f"/api/docs/{doc}/share", json={"username": "bob", "role": "editor"})  # upgrade
+    assert bob.put(f"/api/docs/{doc}", json={"html": "<p>x</p>"}).status_code == 200
+
+    alice.delete(f"/api/docs/{doc}/share/bob")                                         # revoke
+    assert bob.get(f"/api/docs/{doc}").status_code == 404
+
+
+def test_cannot_share_with_unknown_user_or_owner(client_for):
+    alice = client_for("alice")
+    doc = create(alice)
+    assert alice.post(f"/api/docs/{doc}/share", json={"username": "mallory"}).status_code == 400
+    assert alice.post(f"/api/docs/{doc}/share", json={"username": "alice"}).status_code == 400
+
+
+def docx_bytes():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        z.writestr("_rels/.rels", '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
+        z.writestr("word/document.xml", '<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Hello docx</w:t></w:r></w:p></w:body></w:document>')
+    return buf.getvalue()
+
+
+def test_upload_formats_and_validation(client_for):
+    alice = client_for("alice")
+
+    r = alice.post("/api/upload", files={"file": ("notes.txt", b"line <b>1</b>\n\nline 2")})
+    assert r.status_code == 201
+    body = alice.get(f"/api/docs/{r.json()['id']}").json()
+    assert body["title"] == "notes" and "&lt;b&gt;" in body["html"]
+
+    r = alice.post("/api/upload", files={"file": ("plan.md", b"# Heading\n\n- a\n- b")})
+    assert "<h1>Heading</h1>" in alice.get(f"/api/docs/{r.json()['id']}").json()["html"]
+
+    r = alice.post("/api/upload", files={"file": ("a.docx", docx_bytes())})
+    assert r.status_code == 201
+    assert "Hello docx" in alice.get(f"/api/docs/{r.json()['id']}").json()["html"]
+
+    assert alice.post("/api/upload", files={"file": ("evil.exe", b"MZ")}).status_code == 400
+    assert alice.post("/api/upload", files={"file": ("big.txt", b"a" * (2 * 1024 * 1024 + 1))}).status_code == 413
+    assert alice.post("/api/upload", files={"file": ("bad.docx", b"not a zip")}).status_code == 400

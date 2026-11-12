@@ -1,0 +1,6 @@
+fastapi==0.115.0
+uvicorn==0.30.6
+python-multipart==0.0.9
+mammoth==1.8.0
+markdown==3.7
+nh3==0.2.18

@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Docs</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.snow.css">
+<style>
+:root{--ink:#1d2a30;--mute:#62727a;--line:#d9e0e4;--bg:#eef2f4;--panel:#fff;--accent:#16688a;--shared:#a35a00;--err:#b3261e}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg);display:flex;flex-direction:column}
+button,select,input{font:inherit;color:inherit}
+button{border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:6px 12px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.danger{color:var(--err)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+header{display:flex;align-items:center;gap:12px;padding:10px 20px;background:var(--panel);border-bottom:1px solid var(--line)}
+header h1{font-size:18px;margin:0;flex:1;letter-spacing:-.01em}
+header label{color:var(--mute)}
+header select{padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+main{flex:1;display:flex;min-height:0}
+aside{width:300px;border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+.actions{display:flex;gap:8px;padding:12px 12px 4px}
+.hint{padding:0 12px 10px;color:var(--mute);font-size:12.5px}
+.tabs{display:flex;border-bottom:1px solid var(--line)}
+.tabs button{flex:1;border:0;border-radius:0;border-bottom:2px solid transparent;background:none;padding:9px 4px}
+.tabs button.on{border-bottom-color:var(--accent);font-weight:600}
+#list{list-style:none;margin:0;padding:0;overflow:auto;flex:1}
+#list li{padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer}
+#list li:hover{background:var(--bg)}
+#list li.on{background:#e3f0f5;box-shadow:inset 3px 0 var(--accent)}
+#list .t{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#list .s{font-size:12.5px;color:var(--mute)}
+#list .s.sh{color:var(--shared)}
+.none{padding:18px 14px;color:var(--mute)}
+section{flex:1;min-width:0;display:flex;flex-direction:column;padding:16px 24px}
+#empty{margin:auto;color:var(--mute);text-align:center}
+#wrap{flex:1;display:flex;flex-direction:column;min-height:0;max-width:880px;width:100%;margin:0 auto}
+.bar{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+#title{flex:1;min-width:180px;font-size:22px;font-weight:600;border:1px solid transparent;border-radius:6px;padding:4px 8px;background:none;letter-spacing:-.01em}
+#title:hover:not([readonly]),#title:focus{border-color:var(--line);background:var(--panel)}
+.badge{font-size:12.5px;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--mute)}
+.badge.sh{color:var(--shared);border-color:var(--shared)}
+#status{font-size:12.5px;color:var(--mute);min-width:90px;text-align:right}
+#status.err{color:var(--err)}
+#ewrap{flex:1;display:flex;flex-direction:column;min-height:0;background:var(--panel);border:1px solid var(--line);border-radius:6px}
+#ewrap .ql-toolbar{border:0;border-bottom:1px solid var(--line)}
+#ewrap .ql-container{flex:1;overflow:auto;border:0;font-family:Georgia,"Times New Roman",serif;font-size:17px;line-height:1.6}
+#ewrap .ql-editor{padding:28px 36px;max-width:72ch}
+dialog{border:1px solid var(--line);border-radius:8px;padding:20px;width:min(440px,92vw)}
+dialog::backdrop{background:rgba(20,30,35,.4)}
+dialog h2{margin:0 0 12px;font-size:17px}
+.row{display:flex;gap:8px;margin-bottom:12px}
+.row select{flex:1;padding:6px;border:1px solid var(--line);border-radius:6px}
+#slist{list-style:none;margin:0 0 14px;padding:0}
+#slist li{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}
+#slist span{flex:1}
+#toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:9px 16px;border-radius:6px;opacity:0;pointer-events:none;transition:opacity .2s}
+#toast.show{opacity:1}
+@media(max-width:760px){main{flex-direction:column}aside{width:100%;max-height:38vh;border-right:0;border-bottom:1px solid var(--line)}section{padding:12px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Docs</h1>
+  <label for="user">Signed in as</label>
+  <select id="user"></select>
+</header>
+<main>
+  <aside>
+    <div class="actions">
+      <button id="new" class="primary">New document</button>
+      <button id="up">Upload file</button>
+      <input type="file" id="file" hidden accept=".txt,.md,.docx">
+    </div>
+    <div class="hint">Upload creates a new document from a .txt, .md or .docx file (max 2 MB).</div>
+    <div class="tabs">
+      <button data-t="owned" class="on"></button>
+      <button data-t="shared"></button>
+    </div>
+    <ul id="list"></ul>
+  </aside>
+  <section>
+    <div id="empty">Select a document, create one, or upload a file to start.</div>
+    <div id="wrap" hidden>
+      <div class="bar">
+        <input id="title" aria-label="Document title" maxlength="200">
+        <span id="badge" class="badge"></span>
+        <span id="status" role="status"></span>
+        <button id="share">Share</button>
+        <button id="del" class="danger">Delete</button>
+      </div>
+      <div id="ewrap"><div id="editor"></div></div>
+    </div>
+  </section>
+</main>
+<dialog id="dlg">
+  <h2 id="dtitle">Share</h2>
+  <div class="row">
+    <select id="su" aria-label="Person"></select>
+    <select id="sr" aria-label="Access"><option value="editor">Can edit</option><option value="viewer">Can view</option></select>
+    <button id="sadd" class="primary">Share</button>
+  </div>
+  <ul id="slist"></ul>
+  <button id="sclose">Done</button>
+</dialog>
+<div id="toast"></div>
+<script src="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.min.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+let users = [], me = null, cur = null, tab = 'owned', lists = {owned: [], shared: []}, timer = null, dirty = false;
+
+const q = new Quill('#editor', {theme: 'snow', placeholder: 'Start writing…', modules: {toolbar: [
+  [{header: [1, 2, 3, false]}], ['bold', 'italic', 'underline'],
+  [{list: 'ordered'}, {list: 'bullet'}], ['clean']]}});
+
+async function api(path, opts = {}) {
+  const r = await fetch('/api' + path, {credentials: 'same-origin', ...opts});
+  if (!r.ok) {
+    let m = 'Request failed (' + r.status + ')';
+    try { const j = await r.json(); m = typeof j.detail === 'string' ? j.detail : (j.detail && j.detail[0] && j.detail[0].msg) || m; } catch (e) {}
+    throw new Error(m);
+  }
+  return r.status === 204 ? null : r.json();
+}
+const send = (p, b, method = 'POST') => api(p, {method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(b)});
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 3200); }
+function status(m, err) { const s = $('#status'); s.textContent = m; s.className = err ? 'err' : ''; }
+const ago = iso => { const m = Math.round((Date.now() - new Date(iso)) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : new Date(iso).toLocaleDateString(); };
+
+async function refreshList() {
+  try { lists = await api('/docs'); } catch (e) { return toast(e.message); }
+  document.querySelector('[data-t=owned]').textContent = 'My documents (' + lists.owned.length + ')';
+  document.querySelector('[data-t=shared]').textContent = 'Shared with me (' + lists.shared.length + ')';
+  const ul = $('#list'), items = lists[tab];
+  if (!items.length) { ul.innerHTML = '<li class="none">' + (tab === 'owned' ? 'No documents yet. Create one or upload a file.' : 'Nothing has been shared with you yet.') + '</li>'; return; }
+  ul.innerHTML = items.map(d => '<li data-id="' + d.id + '" class="' + (cur && cur.id === d.id ? 'on' : '') + '"><div class="t">' + esc(d.title) + '</div>' +
+    (tab === 'shared' ? '<div class="s sh">From ' + esc(d.owner_name) + ' · ' + (d.role === 'editor' ? 'can edit' : 'view only') + '</div>'
+      : '<div class="s">' + ago(d.updated_at) + (d.n_shared ? ' · shared with ' + d.n_shared : '') + '</div>') + '</li>').join('');
+}
+
+async function save() {
+  if (!cur || !dirty || cur.role === 'viewer') return;
+  clearTimeout(timer); dirty = false; status('Saving…');
+  const id = cur.id;
+  try {
+    await send('/docs/' + id, {title: $('#title').value.trim() || 'Untitled document', html: q.root.innerHTML}, 'PUT');
+    if (cur && cur.id === id && !dirty) status('Saved');
+    refreshList();
+  } catch (e) { dirty = true; status('Not saved: ' + e.message, true); }
+}
+function schedule() { dirty = true; status('Unsaved changes'); clearTimeout(timer); timer = setTimeout(save, 800); }
+q.on('text-change', (d, o, src) => { if (src === 'user') schedule(); });
+$('#title').addEventListener('input', schedule);
+window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); } });
+
+function closeDoc() { cur = null; dirty = false; $('#wrap').hidden = true; $('#empty').hidden = false; }
+async function openDoc(id) {
+  await save();
+  let d;
+  try { d = await api('/docs/' + id); } catch (e) { toast(e.message); closeDoc(); return refreshList(); }
+  cur = d; dirty = false;
+  $('#empty').hidden = true; $('#wrap').hidden = false;
+  $('#title').value = d.title; $('#title').readOnly = d.role === 'viewer';
+  q.setContents([]); q.clipboard.dangerouslyPasteHTML(d.html || '', 'silent');
+  q.enable(d.role !== 'viewer');
+  const b = $('#badge');
+  b.textContent = d.role === 'owner' ? 'Owned by you' : d.role === 'editor' ? 'Shared by ' + d.owner_name + ' · can edit' : 'Shared by ' + d.owner_name + ' · view only';
+  b.className = 'badge' + (d.role === 'owner' ? '' : ' sh');
+  $('#share').hidden = $('#del').hidden = d.role !== 'owner';
+  status(d.role === 'viewer' ? 'Read only' : 'Saved');
+  refreshList();
+}
+
+async function createAndOpen(promise) {
+  try { const r = await promise; tab = 'owned'; syncTabs(); await openDoc(r.id); } catch (e) { toast(e.message); }
+}
+$('#new').onclick = () => createAndOpen(send('/docs', {title: 'Untitled document'}));
+$('#up').onclick = () => $('#file').click();
+$('#file').onchange = e => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  const fd = new FormData(); fd.append('file', f);
+  createAndOpen(api('/upload', {method: 'POST', body: fd}));
+};
+$('#del').onclick = async () => {
+  if (!confirm('Delete "' + cur.title + '" for everyone it is shared with?')) return;
+  try { await api('/docs/' + cur.id, {method: 'DELETE'}); closeDoc(); refreshList(); toast('Document deleted'); } catch (e) { toast(e.message); }
+};
+function syncTabs() { document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.t === tab)); }
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => { tab = b.dataset.t; syncTabs(); refreshList(); });
+$('#list').onclick = e => { const li = e.target.closest('li[data-id]'); if (li) openDoc(li.dataset.id); };
+
+function renderShares(shares) {
+  cur.shares = shares;
+  $('#slist').innerHTML = shares.length ? shares.map(s => '<li><span>' + esc(s.name) + ' <small>(' + s.role + ')</small></span><button data-u="' + s.username + '">Remove</button></li>').join('') : '<li><span>Not shared with anyone yet.</span></li>';
+}
+$('#share').onclick = async () => {
+  await save();
+  $('#dtitle').textContent = 'Share "' + cur.title + '"';
+  $('#su').innerHTML = users.filter(u => u.username !== me.username).map(u => '<option value="' + u.username + '">' + esc(u.name) + '</option>').join('');
+  renderShares(cur.shares || []); $('#dlg').showModal();
+};
+$('#sadd').onclick = async () => {
+  try { renderShares(await send('/docs/' + cur.id + '/share', {username: $('#su').value, role: $('#sr').value})); refreshList(); } catch (e) { toast(e.message); }
+};
+$('#slist').onclick = async e => {
+  const u = e.target.dataset.u; if (!u) return;
+  try { renderShares(await api('/docs/' + cur.id + '/share/' + u, {method: 'DELETE'})); refreshList(); } catch (err) { toast(err.message); }
+};
+$('#sclose').onclick = () => $('#dlg').close();
+
+async function loadUser() {
+  me = await api('/me');
+  $('#user').innerHTML = users.map(u => '<option value="' + u.username + '"' + (u.username === me.username ? ' selected' : '') + '>' + esc(u.name) + '</option>').join('');
+}
+$('#user').onchange = async e => {
+  await save();
+  try { await send('/login', {username: e.target.value}); await loadUser(); closeDoc(); tab = 'owned'; syncTabs(); refreshList(); } catch (err) { toast(err.message); }
+};
+(async () => {
+  try {
+    users = await api('/users');
+    try { await loadUser(); } catch (e) { await send('/login', {username: users[0].username}); await loadUser(); }
+    syncTabs(); refreshList();
+  } catch (e) { toast('Could not start: ' + e.message); }
+})();
+</script>
+</body>
+</html>
