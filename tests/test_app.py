@@ -102,3 +102,42 @@ def test_upload_formats_and_validation(client_for):
     assert alice.post("/api/upload", files={"file": ("evil.exe", b"MZ")}).status_code == 400
     assert alice.post("/api/upload", files={"file": ("big.txt", b"a" * (2 * 1024 * 1024 + 1))}).status_code == 413
     assert alice.post("/api/upload", files={"file": ("bad.docx", b"not a zip")}).status_code == 400
+
+
+def test_session_cookie_cannot_be_forged(client_for):
+    plain = TestClient(app)
+    assert plain.get("/api/me", headers={"Cookie": "session=alice"}).status_code == 401
+    assert plain.get("/api/me", headers={"Cookie": "user=alice"}).status_code == 401
+    token = client_for("alice").cookies.get("session")
+    tampered = token[:-1] + ("0" if token[-1] != "0" else "1")
+    assert plain.get("/api/me", headers={"Cookie": f"session={tampered}"}).status_code == 401
+    swapped = token.replace("alice", "bob", 1)           # change identity, keep signature
+    assert plain.get("/api/me", headers={"Cookie": f"session={swapped}"}).status_code == 401
+    assert plain.get("/api/me", headers={"Cookie": f"session={token}"}).json()["username"] == "alice"
+
+
+def test_export_formats(client_for):
+    import mammoth
+    alice = client_for("alice")
+    doc = create(alice, "My Plan")
+    alice.put(f"/api/docs/{doc}", json={"html": "<h1>Head</h1><p>Hello <strong>bold</strong> <em>it</em> <u>un</u></p>"
+                                                "<ul><li>a</li></ul><ol><li>one</li><li>two</li></ol>"})
+    md = alice.get(f"/api/docs/{doc}/export?format=md")
+    assert md.status_code == 200 and "attachment" in md.headers["content-disposition"]
+    for part in ("# Head", "**bold**", "*it*", "<u>un</u>", "- a", "1. one", "2. two"):
+        assert part in md.text
+    page = alice.get(f"/api/docs/{doc}/export?format=html").text
+    assert "<h1>Head</h1>" in page and "<title>My Plan</title>" in page
+    docx = alice.get(f"/api/docs/{doc}/export?format=docx")
+    assert 'filename="My Plan.docx"' in docx.headers["content-disposition"]
+    text = mammoth.convert_to_html(io.BytesIO(docx.content)).value
+    assert "Hello" in text and "<strong>bold</strong>" in text and "two" in text
+    assert alice.get(f"/api/docs/{doc}/export?format=pdf").status_code == 422
+
+
+def test_export_respects_access(client_for):
+    alice, bob = client_for("alice"), client_for("bob")
+    doc = create(alice)
+    assert bob.get(f"/api/docs/{doc}/export?format=md").status_code == 404
+    alice.post(f"/api/docs/{doc}/share", json={"username": "bob", "role": "viewer"})
+    assert bob.get(f"/api/docs/{doc}/export?format=md").status_code == 200

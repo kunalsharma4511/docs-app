@@ -6,4 +6,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app app
 EXPOSE 8000
 # Render/Fly/Railway inject $PORT; Hugging Face Spaces: set PORT=7860.
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips=*"]

@@ -1,24 +1,36 @@
 """Lightweight collaborative docs: FastAPI + SQLite. Architecture note: see README."""
+import hashlib
+import hmac
 import html as htmllib
 import io
 import os
+import re
+import secrets
 import sqlite3
+import time
 import uuid
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 
 import mammoth
 import markdown
 import nh3
-from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+
+from . import export
 
 # Mock auth: seeded users, identity kept in a cookie. Swap for real auth in production.
 USERS = {"alice": "Alice Johnson", "bob": "Bob Smith", "carol": "Carol Diaz"}
 MAX_UPLOAD = 2 * 1024 * 1024
+# Session cookies are HMAC-signed. Set SESSION_SECRET in production; without it a random
+# secret is generated per process, so sessions reset on restart (fine for a single demo instance).
+SECRET = (os.environ.get("SESSION_SECRET") or secrets.token_hex(32)).encode()
+SESSION_MAX_AGE = 7 * 24 * 3600
 ALLOWED_EXT = {".txt", ".md", ".docx"}
 TAGS = {"p", "br", "strong", "em", "u", "s", "h1", "h2", "h3", "h4",
         "ul", "ol", "li", "blockquote", "a"}
@@ -86,9 +98,30 @@ async def lifespan(_app):
 app = FastAPI(title="Docs", lifespan=lifespan)
 
 
+def _mac(msg: str) -> str:
+    return hmac.new(SECRET, msg.encode(), hashlib.sha256).hexdigest()
+
+
+def sign_session(user: str) -> str:
+    msg = f"{user}:{int(time.time())}"
+    return f"{msg}:{_mac(msg)}"
+
+
+def verify_session(token: str | None) -> str | None:
+    try:
+        user, ts, sig = (token or "").split(":")
+        if not hmac.compare_digest(sig, _mac(f"{user}:{ts}")):
+            return None
+        if time.time() - int(ts) > SESSION_MAX_AGE:
+            return None
+    except ValueError:
+        return None
+    return user if user in USERS else None
+
+
 def current_user(request: Request) -> str:
-    user = request.cookies.get("user")
-    if user not in USERS:
+    user = verify_session(request.cookies.get("session"))
+    if not user:
         raise HTTPException(401, "Log in first.")
     return user
 
@@ -148,10 +181,11 @@ def users():
 
 
 @app.post("/api/login")
-def login(body: Login, response: Response):
+def login(body: Login, request: Request, response: Response):
     if body.username not in USERS:
         raise HTTPException(400, "Unknown user.")
-    response.set_cookie("user", body.username, httponly=True, samesite="lax")
+    response.set_cookie("session", sign_session(body.username), httponly=True, samesite="lax",
+                        max_age=SESSION_MAX_AGE, secure=request.url.scheme == "https")
     return {"username": body.username, "name": USERS[body.username]}
 
 
@@ -191,6 +225,25 @@ def read_doc(doc_id: str, user=Depends(current_user)):
         if role == "owner":
             out["shares"] = share_list(c, doc_id)
         return out
+
+
+@app.get("/api/docs/{doc_id}/export")
+def export_doc(doc_id: str, fmt: Literal["docx", "md", "html"] = Query("docx", alias="format"),
+               user=Depends(current_user)):
+    """Download a document (owners, editors and viewers alike) as .docx, .md or .html."""
+    with db() as c:
+        row, _ = get_access(c, doc_id, user)
+    if fmt == "docx":
+        data = export.to_docx(row["html"])
+        mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    elif fmt == "md":
+        data, mime = export.to_markdown(row["html"]).encode(), "text/markdown; charset=utf-8"
+    else:
+        data, mime = export.to_html(row["title"], row["html"]).encode(), "text/html; charset=utf-8"
+    name = re.sub(r"[^\w\- ]+", "", row["title"]).strip() or "document"
+    ascii_name = name.encode("ascii", "ignore").decode().strip() or "document"
+    disp = f"attachment; filename=\"{ascii_name}.{fmt}\"; filename*=UTF-8''{quote(name)}.{fmt}"
+    return Response(data, media_type=mime, headers={"Content-Disposition": disp})
 
 
 @app.put("/api/docs/{doc_id}")

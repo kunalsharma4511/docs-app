@@ -7,6 +7,8 @@ FastAPI + SQLite + vanilla JS + Quill. No build step, no paid services.
 - **Rich text:** bold, italic, underline, headings (H1-H3), bulleted and numbered lists, clear formatting.
 - **File upload:** `.txt`, `.md` and `.docx` become a new editable document (max 2 MB). Other types are rejected with a clear message. `.docx` keeps headings, bold/italic, lists and links; tables and images are not carried over.
 - **Sharing:** every document has an owner. Owners share with another user as **editor** or **viewer**, change the role, or revoke access. The sidebar separates *My documents* from *Shared with me*, with owner and role shown. Viewers get a read-only editor.
+- **Export:** download any document you can open (owned or shared, including view-only) as Word (.docx), Markdown (.md) or HTML. Formatting (headings, bold, italic, underline, lists) carries over; the .docx is generated without extra dependencies.
+- **Sessions:** login sets an HMAC-signed, expiring, HttpOnly cookie, so identity can't be forged by editing a cookie by hand.
 - **Persistence:** SQLite. Formatting is stored as sanitized HTML.
 
 ## Run locally
@@ -22,10 +24,10 @@ Demo users are seeded (Alice, Bob, Carol). Use the "Signed in as" menu in the he
 ```bash
 pytest -q
 ```
-Covers: auth required, create/rename/reload preserving formatting, HTML sanitization, the full sharing permission matrix (no access, viewer, editor, revoke, owner-only actions), and upload (txt/md/docx, bad type, oversize, corrupt file).
+Covers: auth required, forged/tampered/swapped session cookies, export in all three formats (docx round-tripped through mammoth) and its access rules, create/rename/reload preserving formatting, HTML sanitization, the full sharing permission matrix (no access, viewer, editor, revoke, owner-only actions), and upload (txt/md/docx, bad type, oversize, corrupt file).
 
 ## Deploy (free)
-The app ships as one Docker image. Set `DB_PATH` to change where the SQLite file lives (default in the image: `/tmp/docs.db`).
+The app ships as one Docker image. **Set `SESSION_SECRET` to a long random value** (e.g. `python -c "import secrets;print(secrets.token_hex(32))"`) so sessions survive restarts; otherwise a random one is generated at startup. Set `DB_PATH` to change where the SQLite file lives (default in the image: `/tmp/docs.db`).
 
 **Render (Docker, free web service):** push this folder to GitHub, then New > Web Service > connect repo > Runtime: **Docker** > Instance type: **Free**. Render sets `$PORT` automatically.
 
@@ -41,10 +43,10 @@ The app ships as one Docker image. Set `DB_PATH` to change where the SQLite file
 4. **Upload as an import flow.** Upload turns a file into an editable document, which is the most useful product behavior for a docs tool, and it reuses the same sanitize-and-store path as editing.
 
 **Deliberate trade-offs**
-- Auth is mocked (seeded users + cookie). It demonstrates the sharing model; production would use SSO/OAuth and signed sessions.
+- Auth is mocked: anyone can pick any seeded user (no passwords), though the session itself is signed and can't be forged. Production would use SSO/OAuth.
 - Saves are last-write-wins. There is no live co-editing. The path forward is a CRDT (Yjs) over WebSockets, or at least an `updated_at` version check to detect conflicts.
 - Quill 1.3.7 is loaded from jsDelivr; vendor it into `static/` for offline or locked-down environments.
-- Not built: version history, comments, export, search, attachments on existing documents.
+- Not built: version history, comments, PDF export, search, attachments on existing documents.
 
 ## API summary
-`POST /api/login` · `GET /api/me` · `GET/POST /api/docs` · `GET/PUT/DELETE /api/docs/{id}` · `POST /api/docs/{id}/share` · `DELETE /api/docs/{id}/share/{username}` · `POST /api/upload`
+`POST /api/login` · `GET /api/me` · `GET/POST /api/docs` · `GET/PUT/DELETE /api/docs/{id}` · `POST /api/docs/{id}/share` · `DELETE /api/docs/{id}/share/{username}` · `GET /api/docs/{id}/export?format=docx|md|html` · `POST /api/upload`

@@ -19,7 +19,7 @@ button.danger{color:var(--err)}
 header{display:flex;align-items:center;gap:12px;padding:10px 20px;background:var(--panel);border-bottom:1px solid var(--line)}
 header h1{font-size:18px;margin:0;flex:1;letter-spacing:-.01em}
 header label{color:var(--mute)}
-header select{padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+header select,#exp{padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
 main{flex:1;display:flex;min-height:0}
 aside{width:300px;border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
 .actions{display:flex;gap:8px;padding:12px 12px 4px}
@@ -57,6 +57,7 @@ dialog h2{margin:0 0 12px;font-size:17px}
 #slist{list-style:none;margin:0 0 14px;padding:0}
 #slist li{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}
 #slist span{flex:1}
+#exp{padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);cursor:pointer}
 #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:9px 16px;border-radius:6px;opacity:0;pointer-events:none;transition:opacity .2s}
 #toast.show{opacity:1}
 @media(max-width:760px){main{flex-direction:column}aside{width:100%;max-height:38vh;border-right:0;border-bottom:1px solid var(--line)}section{padding:12px}}
@@ -89,6 +90,7 @@ dialog h2{margin:0 0 12px;font-size:17px}
         <input id="title" aria-label="Document title" maxlength="200">
         <span id="badge" class="badge"></span>
         <span id="status" role="status"></span>
+        <select id="exp" aria-label="Export document"><option value="">Export…</option><option value="docx">Word (.docx)</option><option value="md">Markdown (.md)</option><option value="html">Web page (.html)</option></select>
         <button id="share">Share</button>
         <button id="del" class="danger">Delete</button>
       </div>
@@ -211,6 +213,19 @@ $('#sadd').onclick = async () => {
 $('#slist').onclick = async e => {
   const u = e.target.dataset.u; if (!u) return;
   try { renderShares(await api('/docs/' + cur.id + '/share/' + u, {method: 'DELETE'})); refreshList(); } catch (err) { toast(err.message); }
+};
+$('#exp').onchange = async e => {
+  const f = e.target.value; e.target.value = '';
+  if (!f || !cur) return;
+  await save();
+  try {
+    const r = await fetch('/api/docs/' + cur.id + '/export?format=' + f, {credentials: 'same-origin'});
+    if (!r.ok) throw new Error('Export failed (' + r.status + ')');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(await r.blob());
+    a.download = (cur.title.replace(/[\\/:*?"<>|]+/g, '').trim() || 'document') + '.' + f;
+    a.click(); URL.revokeObjectURL(a.href);
+  } catch (err) { toast(err.message); }
 };
 $('#sclose').onclick = () => $('#dlg').close();
 
