@@ -73,13 +73,17 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users(username TEXT PRIMARY KEY, name TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS docs(
           id TEXT PRIMARY KEY, owner TEXT NOT NULL REFERENCES users(username),
-          title TEXT NOT NULL, html TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL);
+          title TEXT NOT NULL, html TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
+          version INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS shares(
           doc_id TEXT NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
           username TEXT NOT NULL REFERENCES users(username),
           role TEXT NOT NULL CHECK(role IN ('viewer','editor')),
           PRIMARY KEY(doc_id, username));
         """)
+        # Migrate databases created before optimistic concurrency was added.
+        if "version" not in [r["name"] for r in c.execute("PRAGMA table_info(docs)")]:
+            c.execute("ALTER TABLE docs ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
         c.executemany("INSERT OR IGNORE INTO users VALUES(?,?)", USERS.items())
         if not c.execute("SELECT 1 FROM docs").fetchone():
             did = new_doc(c, "alice", "Welcome to Docs",
@@ -163,6 +167,9 @@ class DocCreate(BaseModel):
 class DocPatch(BaseModel):
     title: str | None = Field(None, max_length=200)
     html: str | None = Field(None, max_length=1_000_000)
+    # The version this edit was based on. If given and stale, the save is rejected with 409.
+    # Omitting it keeps last-write-wins behaviour for simple API clients.
+    base_version: int | None = Field(None, ge=1)
 
 
 class ShareIn(BaseModel):
@@ -221,7 +228,7 @@ def read_doc(doc_id: str, user=Depends(current_user)):
         row, role = get_access(c, doc_id, user)
         out = {"id": row["id"], "title": row["title"], "html": row["html"],
                "owner": row["owner"], "owner_name": USERS[row["owner"]],
-               "updated_at": row["updated_at"], "role": role}
+               "updated_at": row["updated_at"], "version": row["version"], "role": role}
         if role == "owner":
             out["shares"] = share_list(c, doc_id)
         return out
@@ -258,9 +265,18 @@ def update_doc(doc_id: str, body: DocPatch, user=Depends(current_user)):
         if body.html is not None:
             html = clean(body.html)
         stamp = now()
-        c.execute("UPDATE docs SET title=?, html=?, updated_at=? WHERE id=?",
-                  (title, html, stamp, doc_id))
-    return {"title": title, "updated_at": stamp}
+        guard = "" if body.base_version is None else " AND version=?"
+        args = (title, html, stamp, doc_id) + (() if body.base_version is None else (body.base_version,))
+        # The version check is part of the UPDATE itself, so it is atomic even with concurrent saves.
+        res = c.execute("UPDATE docs SET title=?, html=?, updated_at=?, version=version+1 "
+                        "WHERE id=?" + guard, args)
+        latest = c.execute("SELECT version FROM docs WHERE id=?", (doc_id,)).fetchone()
+        if res.rowcount == 0:
+            if latest is None:
+                raise HTTPException(404, "Document not found.")
+            raise HTTPException(409, {"message": "Someone else saved a newer version of this document.",
+                                      "version": latest["version"]})
+    return {"title": title, "updated_at": stamp, "version": latest["version"]}
 
 
 @app.delete("/api/docs/{doc_id}", status_code=204)

@@ -141,3 +141,38 @@ def test_export_respects_access(client_for):
     assert bob.get(f"/api/docs/{doc}/export?format=md").status_code == 404
     alice.post(f"/api/docs/{doc}/share", json={"username": "bob", "role": "viewer"})
     assert bob.get(f"/api/docs/{doc}/export?format=md").status_code == 200
+
+
+def test_conflict_detection_blocks_stale_saves(client_for):
+    alice, bob = client_for("alice"), client_for("bob")
+    doc = create(alice)
+    alice.post(f"/api/docs/{doc}/share", json={"username": "bob", "role": "editor"})
+    a, b = alice.get(f"/api/docs/{doc}").json(), bob.get(f"/api/docs/{doc}").json()
+    assert a["version"] == b["version"] == 1
+
+    r = alice.put(f"/api/docs/{doc}", json={"html": "<p>alice</p>", "base_version": a["version"]})
+    assert r.status_code == 200 and r.json()["version"] == 2
+
+    r = bob.put(f"/api/docs/{doc}", json={"html": "<p>bob</p>", "base_version": b["version"]})
+    assert r.status_code == 409 and r.json()["detail"]["version"] == 2
+    assert alice.get(f"/api/docs/{doc}").json()["html"] == "<p>alice</p>"   # not overwritten
+
+    r = bob.put(f"/api/docs/{doc}", json={"title": "Renamed", "base_version": 2})   # after reloading
+    assert r.status_code == 200 and r.json()["version"] == 3
+    assert alice.put(f"/api/docs/{doc}", json={"html": "<p>x</p>"}).json()["version"] == 4  # legacy client
+
+
+def test_init_db_migrates_legacy_database(tmp_path, monkeypatch):
+    import sqlite3
+    path = tmp_path / "old.db"
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE docs(id TEXT PRIMARY KEY, owner TEXT NOT NULL, title TEXT NOT NULL, "
+                "html TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL)")
+    con.execute("INSERT INTO docs VALUES('old1','alice','Old','<p>x</p>','2024-01-01T00:00:00+00:00')")
+    con.commit()
+    con.close()
+    monkeypatch.setenv("DB_PATH", str(path))
+    init_db()
+    init_db()   # idempotent
+    con = sqlite3.connect(path)
+    assert con.execute("SELECT version FROM docs WHERE id='old1'").fetchone()[0] == 1

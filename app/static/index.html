@@ -8,6 +8,7 @@
 <style>
 :root{--ink:#1d2a30;--mute:#62727a;--line:#d9e0e4;--bg:#eef2f4;--panel:#fff;--accent:#16688a;--shared:#a35a00;--err:#b3261e}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 html,body{height:100%;margin:0}
 body{font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg);display:flex;flex-direction:column}
 button,select,input{font:inherit;color:inherit}
@@ -58,6 +59,8 @@ dialog h2{margin:0 0 12px;font-size:17px}
 #slist li{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}
 #slist span{flex:1}
 #exp{padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);cursor:pointer}
+.conflict{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 12px;margin-bottom:10px;border:1px solid var(--err);border-radius:6px;background:#fdecea}
+.conflict span{flex:1;min-width:200px}
 #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:9px 16px;border-radius:6px;opacity:0;pointer-events:none;transition:opacity .2s}
 #toast.show{opacity:1}
 @media(max-width:760px){main{flex-direction:column}aside{width:100%;max-height:38vh;border-right:0;border-bottom:1px solid var(--line)}section{padding:12px}}
@@ -94,6 +97,11 @@ dialog h2{margin:0 0 12px;font-size:17px}
         <button id="share">Share</button>
         <button id="del" class="danger">Delete</button>
       </div>
+      <div id="conflict" class="conflict" role="alert" hidden>
+        <span>Someone else saved a newer version of this document, so your latest edits haven't been saved.</span>
+        <button id="cload">Load latest version</button>
+        <button id="cmine" class="danger">Overwrite with my version</button>
+      </div>
       <div id="ewrap"><div id="editor"></div></div>
     </div>
   </section>
@@ -112,7 +120,7 @@ dialog h2{margin:0 0 12px;font-size:17px}
 <script src="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.min.js"></script>
 <script>
 const $ = s => document.querySelector(s);
-let users = [], me = null, cur = null, tab = 'owned', lists = {owned: [], shared: []}, timer = null, dirty = false;
+let users = [], me = null, cur = null, tab = 'owned', lists = {owned: [], shared: []}, timer = null, dirty = false, conflict = null, inflight = null;
 
 const q = new Quill('#editor', {theme: 'snow', placeholder: 'Start writing…', modules: {toolbar: [
   [{header: [1, 2, 3, false]}], ['bold', 'italic', 'underline'],
@@ -122,8 +130,9 @@ async function api(path, opts = {}) {
   const r = await fetch('/api' + path, {credentials: 'same-origin', ...opts});
   if (!r.ok) {
     let m = 'Request failed (' + r.status + ')';
-    try { const j = await r.json(); m = typeof j.detail === 'string' ? j.detail : (j.detail && j.detail[0] && j.detail[0].msg) || m; } catch (e) {}
-    throw new Error(m);
+    let j = null;
+    try { j = await r.json(); const d = j.detail; m = typeof d === 'string' ? d : (d && d.message) || (d && d[0] && d[0].msg) || m; } catch (e) {}
+    const err = new Error(m); err.status = r.status; err.data = j; throw err;
   }
   return r.status === 204 ? null : r.json();
 }
@@ -145,14 +154,24 @@ async function refreshList() {
 }
 
 async function save() {
-  if (!cur || !dirty || cur.role === 'viewer') return;
+  if (inflight) await inflight;                       // never run two saves at once (avoids self-conflicts)
+  if (!cur || !dirty || cur.role === 'viewer' || conflict) return;
+  inflight = doSave();
+  try { await inflight; } finally { inflight = null; }
+}
+async function doSave() {
   clearTimeout(timer); dirty = false; status('Saving…');
   const id = cur.id;
   try {
-    await send('/docs/' + id, {title: $('#title').value.trim() || 'Untitled document', html: q.root.innerHTML}, 'PUT');
-    if (cur && cur.id === id && !dirty) status('Saved');
+    const res = await send('/docs/' + id, {title: $('#title').value.trim() || 'Untitled document', html: q.root.innerHTML, base_version: cur.version}, 'PUT');
+    if (cur && cur.id === id) { cur.version = res.version; if (!dirty) status('Saved'); }
     refreshList();
-  } catch (e) { dirty = true; status('Not saved: ' + e.message, true); }
+  } catch (e) {
+    dirty = true;
+    if (e.status === 409 && cur && cur.id === id) {
+      conflict = e.data.detail.version; $('#conflict').hidden = false; status('Not saved: conflict', true);
+    } else status('Not saved: ' + e.message, true);
+  }
 }
 function schedule() { dirty = true; status('Unsaved changes'); clearTimeout(timer); timer = setTimeout(save, 800); }
 q.on('text-change', (d, o, src) => { if (src === 'user') schedule(); });
@@ -165,7 +184,7 @@ async function openDoc(id) {
   await save();
   let d;
   try { d = await api('/docs/' + id); } catch (e) { toast(e.message); closeDoc(); return refreshList(); }
-  cur = d; dirty = false;
+  cur = d; dirty = false; conflict = null; $('#conflict').hidden = true;
   $('#empty').hidden = true; $('#wrap').hidden = false;
   $('#title').value = d.title; $('#title').readOnly = d.role === 'viewer';
   q.setContents([]); q.clipboard.dangerouslyPasteHTML(d.html || '', 'silent');
@@ -227,6 +246,8 @@ $('#exp').onchange = async e => {
     a.click(); URL.revokeObjectURL(a.href);
   } catch (err) { toast(err.message); }
 };
+$('#cload').onclick = () => { const id = cur.id; clearTimeout(timer); dirty = false; conflict = null; $('#conflict').hidden = true; openDoc(id); };
+$('#cmine').onclick = () => { cur.version = conflict; conflict = null; $('#conflict').hidden = true; dirty = true; save(); };
 $('#sclose').onclick = () => $('#dlg').close();
 
 async function loadUser() {
